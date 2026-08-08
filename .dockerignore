@@ -3,7 +3,6 @@
 .pi-task
 .pi-spec
 .claude
-Jenkinsfile
 *.md
 .env
 docs/

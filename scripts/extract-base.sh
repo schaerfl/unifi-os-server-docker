@@ -5,6 +5,7 @@
 # Usage:
 #   extract-base.sh --arch <amd64|arm64> [--version <ver|latest>]
 #                   [--installer <path>] [--tag <image:tag>] [--cache-dir <dir>]
+#                   [--out-dir <dir>]
 #
 # Prints the resulting image tag on stdout as the last line.
 set -euo pipefail
@@ -21,6 +22,7 @@ VERSION="${UOS_SERVER_VERSION:-5.1.21}"
 INSTALLER=""
 TAG=""
 CACHE_DIR=".cache/installers"
+OUT_DIR=""
 
 usage() {
     grep '^#' "${BASH_SOURCE[0]}" | head -8 >&2
@@ -34,6 +36,7 @@ while [[ $# -gt 0 ]]; do
         --installer) INSTALLER="${2:?}"; shift 2 ;;
         --tag) TAG="${2:?}"; shift 2 ;;
         --cache-dir) CACHE_DIR="${2:?}"; shift 2 ;;
+        --out-dir) OUT_DIR="${2:?}"; shift 2 ;;
         -h|--help) usage ;;
         *) echo "extract-base.sh: unknown option '$1'" >&2; usage ;;
     esac
@@ -89,8 +92,19 @@ fi
 
 # --- 4: carve the embedded OCI image inside the extractor container -----------
 
-OUT_DIR="$(mktemp -d)"
-trap 'rm -rf "$OUT_DIR"' EXIT
+# The out dir defaults to a workspace-relative path, NOT `mktemp -d` under
+# /tmp: `docker run -v` bind mounts are resolved by the docker daemon's
+# filesystem (in CI a dind sidecar reached over TCP), and /tmp of this
+# container does not exist there - the daemon would silently mount an empty
+# directory and the extraction would "succeed" with no payload.
+OUT_DIR="${OUT_DIR:-$CACHE_DIR/extract-$ARCH}"
+rm -rf "$OUT_DIR"
+mkdir -p "$OUT_DIR"
+# docker -v treats a relative path as a named volume, not a bind mount.
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+# Only the intermediate work/ dir is cleaned up on exit; the out dir itself
+# stays so a failed run can be inspected and the OCI layout reused.
+trap 'rm -rf "$OUT_DIR/work"' EXIT
 
 log "carving embedded OCI image out of $INSTALLER"
 docker run --rm \
@@ -104,15 +118,22 @@ docker run --rm \
     exit 1
 }
 
-# --- 5: import into the local docker daemon -----------------------------------
-# skopeo runs from the extractor image; the docker socket is mounted so the
-# docker-daemon: transport talks to the host daemon.
-log "importing OCI image as $TAG"
+# --- 5: import into the docker daemon ---------------------------------------
+# Two steps instead of `skopeo copy oci:... docker-daemon:...`: the
+# docker-daemon: transport requires a local unix socket, but in CI the daemon
+# is a dind sidecar reached over TCP (DOCKER_HOST=tcp://...) with no socket to
+# mount. skopeo therefore writes a docker-archive tarball, and `docker load`
+# streams it over the Docker API, which works against any DOCKER_HOST.
+log "exporting OCI image as docker archive for $TAG"
 docker run --rm \
     -v "$OUT_DIR/oci:/oci:ro" \
-    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "$OUT_DIR:/out" \
     "$EXTRACTOR_IMAGE" \
-    skopeo copy "oci:/oci" "docker-daemon:$TAG"
+    skopeo copy "oci:/oci" "docker-archive:/out/image.tar:$TAG"
+
+log "loading $TAG into the docker daemon"
+docker load -i "$OUT_DIR/image.tar"
+rm -f "$OUT_DIR/image.tar"
 
 log "done"
 echo "$TAG"

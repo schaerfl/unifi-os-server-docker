@@ -40,8 +40,10 @@ LABEL org.opencontainers.image.source="https://github.com/schaerfl/unifi-os-serv
 STOPSIGNAL SIGRTMIN+3
 ENV container=docker
 
-COPY scripts/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# COPY --chmod avoids a RUN instruction, so no command from the target rootfs
+# is ever executed at build time and cross-architecture builds need no qemu
+# emulation.
+COPY --chmod=0755 scripts/entrypoint.sh /entrypoint.sh
 
 # Single volume holding ALL UniFi OS state (the entrypoint symlinks the
 # individual state paths into it).

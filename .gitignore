@@ -1,6 +1,3 @@
-# Jenkins pipeline is internal CI config — must never enter the public repo.
-Jenkinsfile
-
 # pi/agent task metadata (internal).
 .pi-spec/
 .pi-task/
