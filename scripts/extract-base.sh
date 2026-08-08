@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# extract-base.sh — download a UniFi OS Server installer and turn the embedded
-# OCI rootfs into a local Docker base image.
+# extract-base.sh — download a UniFi OS Server installer and load the embedded
+# container image into the local Docker daemon as a base image.
+#
+# The installer is an ELF executable with a standard ZIP archive appended to
+# it. One of the ZIP entries, image.tar, is an OCI-layout archive (blobs/sha256/
+# + oci-layout + index.json) of the full UniFi OS rootfs, and is loaded directly.
+#
+# REQUIRES Docker >= 25: older engines' `docker load` accepts only the
+# docker-save format and will reject an OCI archive. The CI agents pin docker 28.
 #
 # Usage:
 #   extract-base.sh --arch <amd64|arm64> [--version <ver|latest>]
 #                   [--installer <path>] [--tag <image:tag>] [--cache-dir <dir>]
-#                   [--out-dir <dir>]
 #
 # Prints the resulting image tag on stdout as the last line.
 set -euo pipefail
@@ -14,18 +20,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=uos-fw.sh
 source "$SCRIPT_DIR/uos-fw.sh"
 
-EXTRACTOR_IMAGE="${EXTRACTOR_IMAGE:-uos-extractor:latest}"
-EXTRACTOR_DOCKERFILE="${EXTRACTOR_DOCKERFILE:-$SCRIPT_DIR/../docker/extractor.Dockerfile}"
-
 ARCH=""
 VERSION="${UOS_SERVER_VERSION:-5.1.21}"
 INSTALLER=""
 TAG=""
 CACHE_DIR=".cache/installers"
-OUT_DIR=""
 
 usage() {
-    grep '^#' "${BASH_SOURCE[0]}" | head -8 >&2
+    grep '^#' "${BASH_SOURCE[0]}" | head -11 >&2
     exit 1
 }
 
@@ -36,7 +38,6 @@ while [[ $# -gt 0 ]]; do
         --installer) INSTALLER="${2:?}"; shift 2 ;;
         --tag) TAG="${2:?}"; shift 2 ;;
         --cache-dir) CACHE_DIR="${2:?}"; shift 2 ;;
-        --out-dir) OUT_DIR="${2:?}"; shift 2 ;;
         -h|--help) usage ;;
         *) echo "extract-base.sh: unknown option '$1'" >&2; usage ;;
     esac
@@ -83,57 +84,38 @@ fi
 
 TAG="${TAG:-uosserver-base:${VERSION}-${ARCH}}"
 
-# --- 3: build extractor image -------------------------------------------------
+# --- 3: extract image.tar from the installer and load it ----------------------
 
-if ! docker image inspect "$EXTRACTOR_IMAGE" >/dev/null 2>&1; then
-    log "building extractor image $EXTRACTOR_IMAGE"
-    docker build -f "$EXTRACTOR_DOCKERFILE" -t "$EXTRACTOR_IMAGE" "$SCRIPT_DIR/.."
+if ! unzip -l "$INSTALLER" image.tar >/dev/null; then
+    echo "[extract-base] ERROR: no 'image.tar' entry in $INSTALLER" >&2
+    echo "[extract-base]   installer layout is not the expected ELF with an appended ZIP archive" >&2
+    exit 1
 fi
 
-# --- 4: carve the embedded OCI image inside the extractor container -----------
+# Info-ZIP locates the End Of Central Directory at the end of the file and
+# compensates for the prepended ELF automatically; it may print an
+# "extra bytes at beginning" warning to stderr, which is expected and harmless.
+#
+# `unzip -p` streams the entry to stdout, so the 870 MB tar is never written
+# to disk, and `docker load` streams it over the Docker API, which works
+# against a remote/TCP daemon (the CI dind sidecar).
+log "extracting image.tar from $INSTALLER into the docker daemon"
+LOAD_OUTPUT="$(unzip -p "$INSTALLER" image.tar | docker load)"
 
-# The out dir defaults to a workspace-relative path, NOT `mktemp -d` under
-# /tmp: `docker run -v` bind mounts are resolved by the docker daemon's
-# filesystem (in CI a dind sidecar reached over TCP), and /tmp of this
-# container does not exist there - the daemon would silently mount an empty
-# directory and the extraction would "succeed" with no payload.
-OUT_DIR="${OUT_DIR:-$CACHE_DIR/extract-$ARCH}"
-rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR"
-# docker -v treats a relative path as a named volume, not a bind mount.
-OUT_DIR="$(cd "$OUT_DIR" && pwd)"
-# Only the intermediate work/ dir is cleaned up on exit; the out dir itself
-# stays so a failed run can be inspected and the OCI layout reused.
-trap 'rm -rf "$OUT_DIR/work"' EXIT
-
-log "carving embedded OCI image out of $INSTALLER"
-docker run --rm \
-    -v "$(cd "$(dirname "$INSTALLER")" && pwd)/$(basename "$INSTALLER"):/installer:ro" \
-    -v "$OUT_DIR:/out" \
-    "$EXTRACTOR_IMAGE" \
-    /usr/local/bin/carve-oci /installer /out
-
-[[ -f "$OUT_DIR/oci/oci-layout" && -f "$OUT_DIR/oci/index.json" ]] || {
-    echo "[extract-base] ERROR: extraction did not produce a valid OCI layout at $OUT_DIR/oci" >&2
+# `docker load` prints either "Loaded image: <repo:tag>" (archive carries
+# RepoTags) or "Loaded image ID: sha256:<id>". This archive is an untagged OCI
+# layout, so the ID form is the one normally seen here — hence the retag
+# below, and hence both forms must be parsed. sed, not
+# grep -P: the CI build container is Alpine, where grep is busybox without PCRE.
+LOADED_REF="$(sed -n 's/^Loaded image: //p; s/^Loaded image ID: //p' <<<"$LOAD_OUTPUT" | head -1)"
+if [[ -z "$LOADED_REF" ]]; then
+    echo "[extract-base] ERROR: could not parse a loaded image reference from docker load output:" >&2
+    echo "$LOAD_OUTPUT" >&2
     exit 1
-}
+fi
 
-# --- 5: import into the docker daemon ---------------------------------------
-# Two steps instead of `skopeo copy oci:... docker-daemon:...`: the
-# docker-daemon: transport requires a local unix socket, but in CI the daemon
-# is a dind sidecar reached over TCP (DOCKER_HOST=tcp://...) with no socket to
-# mount. skopeo therefore writes a docker-archive tarball, and `docker load`
-# streams it over the Docker API, which works against any DOCKER_HOST.
-log "exporting OCI image as docker archive for $TAG"
-docker run --rm \
-    -v "$OUT_DIR/oci:/oci:ro" \
-    -v "$OUT_DIR:/out" \
-    "$EXTRACTOR_IMAGE" \
-    skopeo copy "oci:/oci" "docker-archive:/out/image.tar:$TAG"
-
-log "loading $TAG into the docker daemon"
-docker load -i "$OUT_DIR/image.tar"
-rm -f "$OUT_DIR/image.tar"
+log "tagging $LOADED_REF as $TAG"
+docker tag "$LOADED_REF" "$TAG"
 
 log "done"
 echo "$TAG"

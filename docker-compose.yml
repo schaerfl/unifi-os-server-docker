@@ -47,18 +47,17 @@ services:
       - "8080:8080"        # device inform (HTTP)
       - "3478:3478/udp"    # STUN (device NAT traversal)
       - "10003:10003/udp"  # device discovery (L2 broadcast)
-      # Optional ports — uncomment as needed:
-      # - "8443:8443"      # Network app HTTPS (redirect target)
+      # Optional ports (from portmap.json in the official installer) — uncomment as needed:
       # - "8444:8444"      # guest portal HTTPS
-      # - "5514:5514"      # remote syslog
-      # - "6789:6789"      # throughput / UBB speed test
-      # - "5005:5005"      # device discovery
-      # - "9543:9543"      # UniFi OS internal
-      # - "11084:11084"    # device adoption / upgrade
       # - "5671:5671"      # RabbitMQ AMQPS (internal messaging)
-      # - "8880:8880"      # hot-spot / portal redirect
-      # - "8881:8881"      # hot-spot / portal redirect
-      # - "8882:8882"      # hot-spot / portal redirect
+      # - "6789:6789"      # throughput / speed test
+      # - "8880:8880"      # hotspot / portal redirect
+      # - "8881:8881"      # hotspot / portal redirect
+      # - "8882:8882"      # hotspot / portal redirect
+      # - "9543:9543"      # identity hub
+      # - "28082:28082"    # UniFi Network internal
+      # - "11084:11084"    # ucore API (installer binds to 127.0.0.1 only)
+      # - "5514:5514/udp"  # remote syslog
 
     environment:
       # Required: hostname or IP of this host used for device adoption (from .env).

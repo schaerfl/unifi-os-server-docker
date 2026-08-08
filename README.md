@@ -71,21 +71,22 @@ docker run -d \
 
 ## Ports
 
+Ports below match `portmap.json` inside the official installer.
+
 | Port | Protocol | Purpose |
 |---|---|---|
-| `11443 → 443` | TCP | UniFi OS UI / API (HTTPS) |
-| `8080` | TCP | device inform (HTTP) |
+| `11443 → 443` | TCP | UniFi OS web UI / API (HTTPS) |
+| `8080` | TCP | device inform |
 | `3478` | UDP | STUN (device NAT traversal) |
-| `10003` | UDP | device discovery (L2 broadcast) |
-| `8443` | TCP | Network app HTTPS (optional, commented out in compose) |
+| `10003` | UDP | device discovery |
 | `8444` | TCP | guest portal HTTPS (optional) |
-| `5514` | TCP | remote syslog (optional) |
-| `6789` | TCP | throughput / UBB speed test (optional) |
-| `5005` | TCP | device discovery (optional) |
-| `9543` | TCP | UniFi OS internal (optional) |
-| `11084` | TCP | device adoption / upgrade (optional) |
 | `5671` | TCP | RabbitMQ AMQPS (optional) |
-| `8880–8882` | TCP | hot-spot / portal redirect services (optional) |
+| `6789` | TCP | throughput / speed test (optional) |
+| `8880–8882` | TCP | hotspot / portal redirect services (optional) |
+| `9543` | TCP | identity hub (optional) |
+| `28082` | TCP | UniFi Network internal (optional) |
+| `11084` | TCP | ucore API (optional; installer binds to 127.0.0.1 only) |
+| `5514` | UDP | remote syslog (optional) |
 
 ## Environment variables
 
@@ -97,8 +98,9 @@ docker run -d \
 
 ## Building locally
 
-You need `docker`, `bash`, `curl` and `jq`. Extraction runs inside a container,
-so no other host tooling is needed.
+You need `unzip`, `curl`, `jq` and a working `docker` on PATH. The installer
+is an ELF with a ZIP archive appended; `extract-base.sh` streams the embedded
+`image.tar` entry straight into `docker load`.
 
 With make (honours `UOS_SERVER_VERSION` and `IMAGE`):
 
@@ -113,8 +115,6 @@ make build              # extract + build both arches
 Without make:
 
 ```bash
-docker build -f docker/extractor.Dockerfile -t uos-extractor:latest .
-
 ./scripts/extract-base.sh --arch amd64            # -> prints uosserver-base:5.1.21-amd64
 ./scripts/extract-base.sh --arch arm64            # -> prints uosserver-base:5.1.21-arm64
 

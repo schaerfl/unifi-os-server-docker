@@ -5,23 +5,18 @@
 
 UOS_SERVER_VERSION ?= 5.1.21
 IMAGE              ?= ghcr.io/schaerfl/unifi-os-server-docker
-EXTRACTOR_IMAGE    ?= uos-extractor:latest
 
 export UOS_SERVER_VERSION
 
-.PHONY: extractor extract-amd64 extract-arm64 build-amd64 build-arm64 build \
+.PHONY: extract-amd64 extract-arm64 build-amd64 build-arm64 build \
         compose-up compose-down clean
 
-## Build the Alpine-based extraction tooling image.
-extractor:
-	docker build -f docker/extractor.Dockerfile -t $(EXTRACTOR_IMAGE) .
-
-## Download the installer and carve the base rootfs (amd64).
-extract-amd64: extractor
+## Download the installer and extract the base rootfs (amd64).
+extract-amd64:
 	./scripts/extract-base.sh --arch amd64
 
-## Download the installer and carve the base rootfs (arm64).
-extract-arm64: extractor
+## Download the installer and extract the base rootfs (arm64).
+extract-arm64:
 	./scripts/extract-base.sh --arch arm64
 
 ## Build the runtime image for amd64.
@@ -51,8 +46,8 @@ compose-up:
 compose-down:
 	docker compose down
 
-## Remove carved base images, built images and the installer cache.
+## Remove extracted base images, built images and the installer cache.
 clean:
 	-docker rmi $(IMAGE):$(UOS_SERVER_VERSION)-amd64 $(IMAGE):$(UOS_SERVER_VERSION)-arm64 2>/dev/null
 	-docker rmi uosserver-base:$(UOS_SERVER_VERSION)-amd64 uosserver-base:$(UOS_SERVER_VERSION)-arm64 2>/dev/null
-	rm -rf .cache out oci
+	rm -rf .cache

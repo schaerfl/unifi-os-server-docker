@@ -9,8 +9,7 @@
 #   runs MongoDB, PostgreSQL, RabbitMQ and Nginx as systemd units. The included
 #   UniFi Network app is the UniFi-OS-integrated build, not the public .deb.
 #   BASE_IMAGE below must therefore always be the rootfs carved out of the
-#   official installer (see scripts/extract-base.sh). Alpine is used only for
-#   the extractor/tooling stage (docker/extractor.Dockerfile). "Fixing" this
+#   official installer (see scripts/extract-base.sh). "Fixing" this
 #   Dockerfile to FROM alpine would produce a non-functional image.
 
 ARG BASE_IMAGE=uosserver-base:latest
@@ -49,19 +48,19 @@ COPY --chmod=0755 scripts/entrypoint.sh /entrypoint.sh
 # individual state paths into it).
 VOLUME ["/unifi"]
 
-# 443    - UniFi OS UI / API (HTTPS)
-# 8080   - device inform (HTTP)
-# 8443   - Network app HTTPS (redirect target)
-# 8444   - guest portal HTTPS
-# 5514   - remote syslog
-# 6789   - throughput/UBB speed test
-# 5005   - device discovery
-# 9543   - UniFi OS internal
-# 11084  - device adoption/upgrade
-# 5671   - RabbitMQ AMQPS (internal messaging)
-# 8880-2 - hot-spot/portal redirect services
+# Port list taken from portmap.json inside the official installer.
+# 443        - UniFi OS web UI / API (HTTPS, served by the host-level nginx)
+# 8080       - device inform
+# 8444       - guest portal HTTPS
+# 5671       - RabbitMQ AMQPS (internal messaging)
+# 6789       - throughput / speed test
+# 8880-8882  - hotspot/portal redirect services
+# 9543       - identity hub
+# 28082      - UniFi Network internal
+# 11084      - ucore API (installer binds this to 127.0.0.1 only)
 # 3478/udp   - STUN (device NAT traversal)
-# 10003/udp  - device discovery (L2 broadcast)
-EXPOSE 443 8080 8443 8444 5514 6789 5005 9543 11084 5671 8880 8881 8882 3478/udp 10003/udp
+# 5514/udp   - remote syslog
+# 10003/udp  - device discovery
+EXPOSE 443 8080 8444 5671 6789 8880 8881 8882 9543 28082 11084 3478/udp 5514/udp 10003/udp
 
 ENTRYPOINT ["/entrypoint.sh"]
