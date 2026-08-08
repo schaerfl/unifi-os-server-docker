@@ -86,21 +86,32 @@ TAG="${TAG:-uosserver-base:${VERSION}-${ARCH}}"
 
 # --- 3: extract image.tar from the installer and load it ----------------------
 
-if ! unzip -l "$INSTALLER" image.tar >/dev/null; then
-    echo "[extract-base] ERROR: no 'image.tar' entry in $INSTALLER" >&2
+# Info-ZIP exit codes: 0 = clean, 1 = completed successfully but with warnings,
+# >= 2 = real error (11 = requested entry not found). The appended-ZIP layout
+# ALWAYS warns "N extra bytes at beginning or within zipfile", so 1 is the
+# normal, successful case here and must not be treated as a failure.
+unzip_rc=0
+unzip -l "$INSTALLER" image.tar >/dev/null 2>&1 || unzip_rc=$?
+if [[ "$unzip_rc" -gt 1 ]]; then
+    echo "[extract-base] ERROR: no readable 'image.tar' entry in $INSTALLER (unzip exit $unzip_rc)" >&2
     echo "[extract-base]   installer layout is not the expected ELF with an appended ZIP archive" >&2
     exit 1
 fi
 
 # Info-ZIP locates the End Of Central Directory at the end of the file and
-# compensates for the prepended ELF automatically; it may print an
-# "extra bytes at beginning" warning to stderr, which is expected and harmless.
+# compensates for the prepended ELF automatically; the "extra bytes at
+# beginning" warning it prints is expected and harmless.
 #
 # `unzip -p` streams the entry to stdout, so the 870 MB tar is never written
 # to disk, and `docker load` streams it over the Docker API, which works
 # against a remote/TCP daemon (the CI dind sidecar).
+#
+# The `|| [[ $? -le 1 ]]` is load-bearing: unzip exits 1 (warnings) on every
+# read of this installer, and under `set -o pipefail` that would fail the
+# pipeline even though the payload streamed out perfectly. Exit codes >= 2 are
+# still real errors and still abort.
 log "extracting image.tar from $INSTALLER into the docker daemon"
-LOAD_OUTPUT="$(unzip -p "$INSTALLER" image.tar | docker load)"
+LOAD_OUTPUT="$( { unzip -p "$INSTALLER" image.tar || [[ $? -le 1 ]]; } | docker load )"
 
 # `docker load` prints either "Loaded image: <repo:tag>" (archive carries
 # RepoTags) or "Loaded image ID: sha256:<id>". This archive is an untagged OCI
