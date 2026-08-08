@@ -1,0 +1,20 @@
+# Jenkins pipeline is internal CI config — must never enter the public repo.
+Jenkinsfile
+
+# pi/agent task metadata (internal).
+.pi-spec/
+.pi-task/
+
+# Claude/agent local config (internal).
+.claude/
+
+# Local environment — may contain secrets.
+.env
+
+# Downloaded UniFi OS Server installers (~880 MB each).
+.cache/
+*.bin
+
+# Carved OCI layouts / extraction output.
+oci/
+out/

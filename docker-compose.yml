@@ -1,0 +1,70 @@
+name: unifi-os-server
+
+services:
+  unifi-os-server:
+    image: ghcr.io/schaerfl/unifi-os-server-docker:latest
+    container_name: unifi-os-server
+    restart: unless-stopped
+    # systemd inside the container manages several services; give them time to stop.
+    stop_grace_period: 2m
+    # systemd requires the host cgroup tree mounted read-write.
+    cgroup: host
+
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+      - NET_RAW
+      - NET_BIND_SERVICE
+      - DAC_OVERRIDE
+      - DAC_READ_SEARCH
+      - FOWNER
+      - CHOWN
+      - SETUID
+      - SETGID
+      - KILL
+      - SYS_CHROOT
+      - SYS_PTRACE
+      - SYS_RESOURCE
+      - AUDIT_WRITE
+      - MKNOD
+
+    tmpfs:
+      - /run:exec
+      - /run/lock
+      - /tmp:exec
+      - /var/lib/journal
+      - /var/opt/unifi/tmp:size=64m
+
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      # Single named volume holding ALL UniFi OS state (entrypoint symlinks into it).
+      - unifi_data:/unifi
+
+    ports:
+      - "11443:443"        # UniFi OS UI / API (HTTPS)
+      - "8080:8080"        # device inform (HTTP)
+      - "3478:3478/udp"    # STUN (device NAT traversal)
+      - "10003:10003/udp"  # device discovery (L2 broadcast)
+      # Optional ports — uncomment as needed:
+      # - "8443:8443"      # Network app HTTPS (redirect target)
+      # - "8444:8444"      # guest portal HTTPS
+      # - "5514:5514"      # remote syslog
+      # - "6789:6789"      # throughput / UBB speed test
+      # - "5005:5005"      # device discovery
+      # - "9543:9543"      # UniFi OS internal
+      # - "11084:11084"    # device adoption / upgrade
+      # - "5671:5671"      # RabbitMQ AMQPS (internal messaging)
+      # - "8880:8880"      # hot-spot / portal redirect
+      # - "8881:8881"      # hot-spot / portal redirect
+      # - "8882:8882"      # hot-spot / portal redirect
+
+    environment:
+      # Required: hostname or IP of this host used for device adoption (from .env).
+      UOS_SYSTEM_IP: ${UOS_SYSTEM_IP:?Set UOS_SYSTEM_IP in .env}
+      # Optional: pin a fixed machine UUID (otherwise generated once and persisted).
+      UOS_UUID: ${UOS_UUID:-}
+
+volumes:
+  unifi_data:
