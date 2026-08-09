@@ -105,14 +105,47 @@ link_into_volume /etc/rabbitmq/ssl     rabbitmq-ssl
 # reads (`UOS_UUID=$(cat /data/uos_uuid)`), and /data is symlinked into the volume
 # above, so it persists. Do not "tidy" this to another path.
 
+# The UUID must be a **version 5** (SHA-1, name-based) UUID. A real UniFi OS
+# Server install uses one, and the UniFi Network application validates the
+# version: given a random v4 UUID it refuses to start, crash-looping with
+#     Factory method 'systemService' threw exception ... Invalid uuid version - 4
+# and UniFi Core then reports "Network application is not ready for setup",
+# which surfaces in the browser as "an error occurred" after the boot screen.
+# /proc/sys/kernel/random/uuid yields v4, so it cannot be used directly.
+
+# RFC 4122 v5 in pure bash (verified to match Python's uuid.uuid5 with the
+# standard DNS namespace). Only sha1sum is required.
+uuid5() {
+    local ns="6ba7b8109dad11d180b400c04fd430c8" name="$1" esc="" i hex b6 b8
+    for ((i = 0; i < 32; i += 2)); do esc+="\\x${ns:i:2}"; done
+    hex="$( { printf '%b' "$esc"; printf '%s' "$name"; } | sha1sum | cut -d' ' -f1 )"
+    b6=$(( (0x${hex:12:2} & 0x0f) | 0x50 ))   # version 5
+    b8=$(( (0x${hex:16:2} & 0x3f) | 0x80 ))   # RFC 4122 variant
+    printf '%s-%s-%02x%s-%02x%s-%s\n' \
+        "${hex:0:8}" "${hex:8:4}" "$b6" "${hex:14:2}" "$b8" "${hex:18:2}" "${hex:20:12}"
+}
+
+uuid_is_v5() {
+    [[ "${1:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+}
+
+UUID=""
 if [[ -n "${UOS_UUID:-}" ]]; then
     UUID="$UOS_UUID"
 elif [[ -s /unifi/uuid ]]; then
     UUID="$(cat /unifi/uuid)"
-else
-    UUID="$(cat /proc/sys/kernel/random/uuid)"
+fi
+
+# Also re-generates when a v4 UUID was persisted by an older build of this image.
+if ! uuid_is_v5 "$UUID"; then
+    [[ -n "$UUID" ]] && log "discarding non-v5 machine UUID: $UUID"
+    # Seed from the MAC, which is what `ubnt-tools id` reports as board.serialno,
+    # so the UUID is stable for as long as the interface is.
+    SEED="$(tr -d ':' < /sys/class/net/eth0/address 2>/dev/null || true)"
+    [[ -z "$SEED" ]] && SEED="$(hostname)-$(cat /proc/sys/kernel/random/uuid)"
+    UUID="$(uuid5 "$SEED")"
     echo "$UUID" > /unifi/uuid
-    log "generated new machine UUID: $UUID"
+    log "generated machine UUID (v5): $UUID"
 fi
 export UOS_UUID="$UUID"
 echo "$UUID" > /data/uos_uuid
