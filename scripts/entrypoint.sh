@@ -52,7 +52,19 @@ link_into_volume() {
         return 0
     fi
 
+    # Capture the ORIGINAL ownership and mode before the directory is replaced.
+    # Several UniFi OS units run as a non-root User= (mongodb, postgres, unifi,
+    # rabbitmq) and need to write inside their state directory. `cp -a` only
+    # preserves ownership of the *contents* it copies, and on a fresh install
+    # these directories are empty, so nothing is copied and the plain `mkdir -p`
+    # below would leave the volume directory root:root. mongod then exits 100
+    # ("Started" immediately followed by "Failed with result exit-code") and the
+    # UniFi UI on 443 never comes up, which surfaces as a Traefik 502.
+    local owner="" mode=""
     if [[ -d "$real_path" ]]; then
+        owner="$(stat -c '%u:%g' "$real_path")"
+        mode="$(stat -c '%a' "$real_path")"
+
         mkdir -p "$vol_path"
         # First run with pre-existing data: migrate it, but only into an empty target.
         if [[ -z "$(ls -A "$vol_path")" ]] && [[ -n "$(ls -A "$real_path")" ]]; then
@@ -63,6 +75,13 @@ link_into_volume() {
     fi
 
     mkdir -p "$vol_path"
+
+    # Re-apply the original uid/gid/mode to the volume directory itself.
+    if [[ -n "$owner" ]]; then
+        chown "$owner" "$vol_path"
+        chmod "$mode" "$vol_path"
+    fi
+
     mkdir -p "$(dirname "$real_path")"
     ln -sfn "$vol_path" "$real_path"
 }
@@ -82,8 +101,9 @@ link_into_volume /etc/rabbitmq/ssl     rabbitmq-ssl
 #   1. $UOS_UUID (explicit user pinning)
 #   2. /unifi/uuid (persisted from a previous run)
 #   3. freshly generated and written to /unifi/uuid
-# The UUID is written to /persistent/uuid, which lands in the volume through the
-# symlink created above — the location UniFi OS reads its system UUID from.
+# The UUID is written to /data/uos_uuid — that exact path is what `ubnt-tools id`
+# reads (`UOS_UUID=$(cat /data/uos_uuid)`), and /data is symlinked into the volume
+# above, so it persists. Do not "tidy" this to another path.
 
 if [[ -n "${UOS_UUID:-}" ]]; then
     UUID="$UOS_UUID"
@@ -95,7 +115,32 @@ else
     log "generated new machine UUID: $UUID"
 fi
 export UOS_UUID="$UUID"
-echo "$UUID" > /persistent/uuid
+echo "$UUID" > /data/uos_uuid
+
+# --- 3b: identity files the official installer normally provides -----------------
+# Upstream, the `uosserver` supervisor binary prepares the container before
+# starting it. Running the rootfs directly skips that, so three things it creates
+# have to be recreated here or UniFi Core never starts:
+#
+#   /usr/lib/version   `ubnt-tools id` derives the console model from the FIRST
+#                      dot-separated field (APP_MODEL=$(cut -d. -f1 ...)), and
+#                      unifi-core aborts with `Unsupported console model: ""`
+#                      when it is missing. Format matches a real install:
+#                      UOSSERVER.0000000.<version>.0000000.000000.0000
+#   /data/unifi-core/config/http
+#                      unifi-core's pre-start hook does `mkdir -p` on
+#                      .../config but then copies into .../config/http, so the
+#                      leaf directory must already exist.
+#
+# /usr/lib/product_name is deliberately NOT created: it is absent on a real
+# UniFi OS Server install too (board.name comes back empty there as well).
+
+if [[ ! -s /usr/lib/version ]]; then
+    echo "UOSSERVER.0000000.${UOS_SERVER_VERSION}.0000000.000000.0000" > /usr/lib/version
+    log "wrote /usr/lib/version for UOSSERVER ${UOS_SERVER_VERSION}"
+fi
+
+mkdir -p /data/unifi-core/config/http
 
 # --- 4: publish UOS_SYSTEM_IP to the services ------------------------------------
 # systemd services started later source /etc/default/unifi-os-server; writing the
