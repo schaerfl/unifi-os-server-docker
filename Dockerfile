@@ -44,6 +44,11 @@ ENV container=docker
 # emulation.
 COPY --chmod=0755 scripts/entrypoint.sh /entrypoint.sh
 
+# Stop the container journal and the host kernel log from bleeding into each
+# other in both directions. See the file itself for what each setting prevents.
+COPY --chmod=0644 config/journald-container.conf \
+     /etc/systemd/journald.conf.d/10-container.conf
+
 # Single volume holding ALL UniFi OS state (the entrypoint symlinks the
 # individual state paths into it).
 VOLUME ["/unifi"]
