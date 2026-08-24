@@ -155,10 +155,20 @@ echo "$UUID" > /data/uos_uuid
 # starting it. Running the rootfs directly skips that, so three things it creates
 # have to be recreated here or UniFi Core never starts:
 #
-#   /usr/lib/version   `ubnt-tools id` derives the console model from the FIRST
-#                      dot-separated field (APP_MODEL=$(cut -d. -f1 ...)), and
-#                      unifi-core aborts with `Unsupported console model: ""`
-#                      when it is missing. Format matches a real install:
+#   /usr/lib/app_model `ubnt-tools id` reads the console model verbatim from this
+#                      file (APP_MODEL=$(cat /usr/lib/app_model)) and uses it to
+#                      look up board.sysid in its boardSysIds table. Missing or
+#                      empty, `ubnt-tools id` reports board.shortname= and dies
+#                      on `boardSysIds: bad array subscript`, and unifi-core then
+#                      crash-loops with `Unsupported console model: ""`.
+#
+#                      Up to 5.1.21 the model was instead derived from the first
+#                      dot-separated field of /usr/lib/version, so that file
+#                      alone was enough. 5.1.37 changed the lookup to app_model
+#                      and broke every container that only wrote version. Write
+#                      BOTH: version is still read for the reported firmware
+#                      version, app_model for the identity.
+#   /usr/lib/version   Reported firmware version. Format matches a real install:
 #                      UOSSERVER.0000000.<version>.0000000.000000.0000
 #   /data/unifi-core/config/http
 #                      unifi-core's pre-start hook does `mkdir -p` on
@@ -168,9 +178,22 @@ echo "$UUID" > /data/uos_uuid
 # /usr/lib/product_name is deliberately NOT created: it is absent on a real
 # UniFi OS Server install too (board.name comes back empty there as well).
 
+# The model string is one of the keys in ubnt-tools' boardSysIds table
+# (UOSSERVER / IDENTITY_SYNC_SERVICE / PROTECT_SERVER). For this image it is
+# always UOSSERVER, and it must match the first field of /usr/lib/version.
+UOS_APP_MODEL="UOSSERVER"
+
 if [[ ! -s /usr/lib/version ]]; then
-    echo "UOSSERVER.0000000.${UOS_SERVER_VERSION}.0000000.000000.0000" > /usr/lib/version
-    log "wrote /usr/lib/version for UOSSERVER ${UOS_SERVER_VERSION}"
+    echo "${UOS_APP_MODEL}.0000000.${UOS_SERVER_VERSION}.0000000.000000.0000" > /usr/lib/version
+    log "wrote /usr/lib/version for ${UOS_APP_MODEL} ${UOS_SERVER_VERSION}"
+fi
+
+# No newline: ubnt-tools does APP_MODEL=$(cat ...) then uses it as an associative
+# array subscript, so a trailing newline would be stripped by $() anyway — but
+# printf keeps the file byte-identical to a real install.
+if [[ ! -s /usr/lib/app_model ]]; then
+    printf '%s' "$UOS_APP_MODEL" > /usr/lib/app_model
+    log "wrote /usr/lib/app_model=${UOS_APP_MODEL}"
 fi
 
 mkdir -p /data/unifi-core/config/http
